@@ -1,0 +1,7 @@
+# Pythonキャッシュファイル
+__pycache__/
+*.pyc
+
+# 開発テスト時に作られたデータファイル（GitHubには上げない）
+*.xlsx
+accounts.json
