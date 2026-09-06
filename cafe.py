@@ -121,50 +121,39 @@ if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
 if "confirm_logout" not in st.session_state:
     st.session_state.confirm_logout = False
-if "admin_view_page" not in st.session_state:
-    st.session_state.admin_view_page = "⚙️ メニュー・レイアウト設定"
 
-# --- ⑤ UI表示制御 (CSS) ---
-# 管理者モード時のみサイドバーを表示し、それ以外は非表示
-css_hide_elements = """
-<style>
-[data-testid="stHeader"] { display: none !important; }
-footer { display: none !important; }
-#MainMenu { display: none !important; }
-.stDeployButton { display: none !important; }
-</style>
-"""
-
-css_hide_sidebar = """
-<style>
-[data-testid="stSidebar"] { display: none !important; }
-</style>
-"""
-
+# --- ① UI表示制御 (CSS) ---
+# 管理者モード以外（または未ログイン時）のみヘッダー・フッター・サイドバーを隠す
 if not st.session_state.is_admin:
-    st.markdown(css_hide_elements + css_hide_sidebar, unsafe_allow_html=True)
-else:
-    st.markdown(css_hide_elements, unsafe_allow_html=True)
+    st.markdown("""
+    <style>
+    [data-testid="stHeader"] { display: none !important; }
+    footer { display: none !important; }
+    #MainMenu { display: none !important; }
+    .stDeployButton { display: none !important; }
+    [data-testid="stSidebar"] { display: none !important; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# 右クリック・ショートカット無効化
-disable_devtools = """
-<script>
-const setupApp = function() {
-    const targetDoc = window.parent.document || document;
-    targetDoc.addEventListener('contextmenu', e => e.preventDefault(), true);
-    targetDoc.addEventListener('keydown', e => {
-        if (e.keyCode === 123 || ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.keyCode === 73 || e.keyCode === 74)) || ((e.ctrlKey || e.metaKey) && e.keyCode === 85)) {
-            e.preventDefault(); return false;
-        }
-    }, true);
-};
-if (document.readyState === "complete" || document.readyState === "interactive") setupApp();
-else window.addEventListener("DOMContentLoaded", setupApp);
-</script>
-"""
-components.html(disable_devtools, height=0, width=0)
+    # 非管理者モード時はコンソール操作やショートカットを制御
+    disable_devtools = """
+    <script>
+    const setupApp = function() {
+        const targetDoc = window.parent.document || document;
+        targetDoc.addEventListener('contextmenu', e => e.preventDefault(), true);
+        targetDoc.addEventListener('keydown', e => {
+            if (e.keyCode === 123 || ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.keyCode === 73 || e.keyCode === 74)) || ((e.ctrlKey || e.metaKey) && e.keyCode === 85)) {
+                e.preventDefault(); return false;
+            }
+        }, true);
+    };
+    if (document.readyState === "complete" || document.readyState === "interactive") setupApp();
+    else window.addEventListener("DOMContentLoaded", setupApp);
+    </script>
+    """
+    components.html(disable_devtools, height=0, width=0)
 
-# --- 共通ログアウト表示関数（① モード選択画面へ戻る） ---
+# --- 共通ログアウト表示関数 ---
 def render_header_logout_button():
     col_a, col_b = st.columns([4, 1])
     with col_a:
@@ -188,7 +177,7 @@ def render_header_logout_button():
                     st.session_state.confirm_logout = False
                     st.rerun()
 
-# --- 🔐 ① 新規登録 ＆ ログイン画面 ---
+# --- 新規登録 ＆ ログイン画面 ---
 if not st.session_state.logged_org:
     st.markdown("<br>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 2, 1])
@@ -228,8 +217,7 @@ if not st.session_state.logged_org:
                     else:
                         accounts[new_org_id] = {
                             "password": new_pass,
-                            "admin_password": None,
-                            "is_first_login": True
+                            "admin_password": None
                         }
                         save_accounts(accounts)
                         init_org_excel(new_org_id)
@@ -243,31 +231,7 @@ org_id = st.session_state.logged_org
 accounts = load_accounts()
 org_acc = accounts[org_id]
 
-# --- ② 初回ログイン時 セットアップウィザード ---
-if org_acc.get("is_first_login", False):
-    st.title("🎉 ご登録ありがとうございます！")
-    st.subheader("最初に店舗のメニューや卓数の初期設定を行いますか？")
-    st.info("※設定は後から「管理者モード」でいつでも自由に変更できます。")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("⚙️ 今すぐ初期設定をする", type="primary", use_container_width=True):
-            org_acc["is_first_login"] = False
-            save_accounts(accounts)
-            st.session_state.selected_mode = "👑 管理者モード"
-            st.session_state.is_admin = True
-            st.session_state.admin_view_page = "⚙️ メニュー・レイアウト設定"
-            st.rerun()
-    with col2:
-        if st.button("⏩ 今回はスキップ（デフォルト設定で使用）", use_container_width=True):
-            org_acc["is_first_login"] = False
-            save_accounts(accounts)
-            st.success("デフォルト設定で開始します！")
-            time.sleep(0.5)
-            st.rerun()
-    st.stop()
-
-# --- ③ ログイン後のモード選択メニュー ---
+# --- ログイン後のモード選択メニュー ---
 if not st.session_state.selected_mode:
     st.markdown("<br>", unsafe_allow_html=True)
     st.title(f"🏫 団体: {org_id} ｜ 起動モード選択")
@@ -317,10 +281,12 @@ if not st.session_state.selected_mode:
     st.markdown("---")
     if st.button("🚪 団体ログイン画面へ（別団体でログイン）"):
         st.session_state.logged_org = None
+        st.session_state.selected_mode = None
+        st.session_state.is_admin = False
         st.rerun()
     st.stop()
 
-# --- 👑 管理者モード認証処理 ---
+# --- 管理者モード認証処理 ---
 if st.session_state.selected_mode == "👑 管理者モード" and not st.session_state.is_admin:
     st.title("👑 管理者モード認証")
     admin_pw = org_acc.get("admin_password")
@@ -354,6 +320,7 @@ if st.session_state.selected_mode == "👑 管理者モード" and not st.sessio
         with c2:
             if st.button("キャンセル（モード選択へ）"):
                 st.session_state.selected_mode = None
+                st.session_state.is_admin = False
                 st.rerun()
     st.stop()
 
@@ -540,7 +507,7 @@ if st.session_state.selected_mode != "👑 管理者モード":
     elif st.session_state.selected_mode == "🗺️ 店内状況表示":
         render_map_page()
 
-# 👑 管理者モード（全画面切替可能なサイドバー付き）
+# 👑 管理者モード（サイドバーと右上のStreamlit標準UIをフル表示）
 else:
     st.sidebar.title(f"👑 {org_id} 管理メニュー")
     
@@ -574,7 +541,7 @@ else:
 
     # 管理者用メインコンテンツ切り替え
     if page == "⚙️ メニュー・レイアウト設定":
-        st.title("⚙️ 店舗初期設定・カスタマイズ")
+        st.title("⚙️ 店舗設定・カスタマイズ")
         tab1, tab2 = st.tabs(["☕ メニュー設定", "🪑 テーブル設定"])
         with tab1:
             st.caption("※メニューの追加・編集・削除を行えます。変更後は下の「保存」を押してください。")
