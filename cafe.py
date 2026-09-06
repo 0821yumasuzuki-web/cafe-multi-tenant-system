@@ -119,10 +119,8 @@ if "selected_mode" not in st.session_state:
     st.session_state.selected_mode = None
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
-if "confirm_logout" not in st.session_state:
-    st.session_state.confirm_logout = False
 
-# --- ① UI表示制御 (CSS) ---
+# --- UI表示制御 (CSS) ---
 # 管理者モード以外（または未ログイン時）のみヘッダー・フッター・サイドバーを隠す
 if not st.session_state.is_admin:
     st.markdown("""
@@ -153,29 +151,16 @@ if not st.session_state.is_admin:
     """
     components.html(disable_devtools, height=0, width=0)
 
-# --- 共通ログアウト表示関数 ---
+# --- 共通ログアウト・戻るヘッダー関数 ---
 def render_header_logout_button():
     col_a, col_b = st.columns([4, 1])
     with col_a:
         st.caption(f"🏫 ログイン中: **{st.session_state.logged_org}** ｜ モード: **{st.session_state.selected_mode}**")
     with col_b:
         if st.button("🚪 モード選択へ戻る", key="top_logout_btn", use_container_width=True):
-            st.session_state.confirm_logout = True
-
-    if st.session_state.confirm_logout:
-        with st.container(border=True):
-            st.warning("⚠️ **現在の画面を終了してモード選択画面へ戻りますか？**")
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("はい（戻る）", type="primary", use_container_width=True):
-                    st.session_state.selected_mode = None
-                    st.session_state.is_admin = False
-                    st.session_state.confirm_logout = False
-                    st.rerun()
-            with c2:
-                if st.button("いいえ（キャンセル）", use_container_width=True):
-                    st.session_state.confirm_logout = False
-                    st.rerun()
+            st.session_state.selected_mode = None
+            st.session_state.is_admin = False
+            st.rerun()
 
 # --- 新規登録 ＆ ログイン画面 ---
 if not st.session_state.logged_org:
@@ -273,7 +258,7 @@ if not st.session_state.selected_mode:
     with c5:
         with st.container(border=True):
             st.header("👑 管理者")
-            st.write("全画面閲覧・売上確認・各種設定")
+            st.write("売上確認・各種設定")
             if st.button("「管理者モード」を起動", use_container_width=True):
                 st.session_state.selected_mode = "👑 管理者モード"
                 st.rerun()
@@ -291,7 +276,6 @@ if st.session_state.selected_mode == "👑 管理者モード" and not st.sessio
     st.title("👑 管理者モード認証")
     admin_pw = org_acc.get("admin_password")
 
-    # 初回管理者モード起動時（パスワード未設定の場合）
     if admin_pw is None:
         st.info("💡 管理者モード用のパスワードが未設定です。新しい管理者パスワードを設定してください。")
         new_admin_pw = st.text_input("新規 管理者パスワード", type="password", key="set_admin_pw")
@@ -507,7 +491,7 @@ if st.session_state.selected_mode != "👑 管理者モード":
     elif st.session_state.selected_mode == "🗺️ 店内状況表示":
         render_map_page()
 
-# 👑 管理者モード（サイドバーと右上のStreamlit標準UIをフル表示）
+# 👑 管理者モード（サイドバー表示）
 else:
     st.sidebar.title(f"👑 {org_id} 管理メニュー")
     
@@ -517,12 +501,7 @@ else:
             "⚙️ メニュー・レイアウト設定",
             "📊 売上データ確認・取消",
             "🔐 管理者パスワード変更",
-            "🧹 データ初期化",
-            "--- 各機能の確認 ---",
-            "🛒 レジ画面",
-            "👨‍🍳 バックヤード画面",
-            "🏢 店内退席確認画面",
-            "🗺️ 店内状況表示画面"
+            "🧹 データ初期化"
         ],
         index=0
     )
@@ -533,16 +512,11 @@ else:
         st.session_state.is_admin = False
         st.rerun()
 
-    if st.sidebar.button("🚪 団体ログアウト", type="primary", use_container_width=True):
-        st.session_state.logged_org = None
-        st.session_state.selected_mode = None
-        st.session_state.is_admin = False
-        st.rerun()
-
     # 管理者用メインコンテンツ切り替え
     if page == "⚙️ メニュー・レイアウト設定":
         st.title("⚙️ 店舗設定・カスタマイズ")
         tab1, tab2 = st.tabs(["☕ メニュー設定", "🪑 テーブル設定"])
+        
         with tab1:
             st.caption("※メニューの追加・編集・削除を行えます。変更後は下の「保存」を押してください。")
             edited_menu = st.data_editor(df_menu, num_rows="dynamic", use_container_width=True, key="menu_ed")
@@ -551,11 +525,18 @@ else:
                 st.success("保存しました！")
                 time.sleep(0.5)
                 st.rerun()
+                
         with tab2:
             st.caption("※座席レイアウトや卓数の編集が行えます。")
-            edited_tables = st.data_editor(df_tables, num_rows="dynamic", use_container_width=True, key="tbl_ed")
+            display_tables_df = df_tables[["テーブル番号", "定員", "エリア"]] if "ステータス" in df_tables.columns else df_tables
+            edited_tables_view = st.data_editor(display_tables_df, num_rows="dynamic", use_container_width=True, key="tbl_ed")
+            
             if st.button("💾 テーブル設定を保存", type="primary"):
-                save_org_sheets(org_id, df_menu, df_orders, edited_tables)
+                if "ステータス" not in edited_tables_view.columns:
+                    status_map = dict(zip(df_tables["テーブル番号"], df_tables["ステータス"]))
+                    edited_tables_view["ステータス"] = edited_tables_view["テーブル番号"].map(status_map).fillna("空席")
+                
+                save_org_sheets(org_id, df_menu, df_orders, edited_tables_view)
                 st.success("保存しました！")
                 time.sleep(0.5)
                 st.rerun()
@@ -613,13 +594,3 @@ else:
             st.success("全データを初期化しました！")
             time.sleep(0.5)
             st.rerun()
-
-    # 各専用画面のプレビュー・操作
-    elif page == "🛒 レジ画面":
-        render_pos_page()
-    elif page == "👨‍🍳 バックヤード画面":
-        render_backyard_page()
-    elif page == "🏢 店内退席確認画面":
-        render_reception_page()
-    elif page == "🗺️ 店内状況表示画面":
-        render_map_page()
