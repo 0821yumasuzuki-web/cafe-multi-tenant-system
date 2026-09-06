@@ -10,41 +10,8 @@ import streamlit.components.v1 as components
 st.set_page_config(
     page_title="マルチテナント型 カフェ総合管理システム", 
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
-
-# --- 🛡️ UIカスタマイズ ＆ 保護設定 ---
-hide_and_protect_style = """
-    <style>
-    [data-testid="stHeader"] > div:nth-child(2) { display: none !important; visibility: hidden !important; }
-    .stActionButton, [data-testid="stActionButton"], [data-testid="stHeaderActionElements"] { display: none !important; visibility: hidden !important; }
-    #MainMenu { visibility: hidden !important; display: none !important; }
-    .stAppDeployButton { display: none !important; visibility: hidden !important; }
-    footer { visibility: hidden !important; display: none !important; }
-    [data-testid="stSidebar"] { display: block !important; visibility: visible !important; }
-    body { user-select: none; -webkit-user-select: none; }
-    input, textarea { user-select: text !important; -webkit-user-select: text !important; }
-    </style>
-"""
-st.markdown(hide_and_protect_style, unsafe_allow_html=True)
-
-# 右クリック・ショートカット無効化
-disable_devtools = """
-    <script>
-    const setupApp = function() {
-        const targetDoc = window.parent.document || document;
-        targetDoc.addEventListener('contextmenu', e => e.preventDefault(), true);
-        targetDoc.addEventListener('keydown', e => {
-            if (e.keyCode === 123 || ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.keyCode === 73 || e.keyCode === 74)) || ((e.ctrlKey || e.metaKey) && e.keyCode === 85)) {
-                e.preventDefault(); return false;
-            }
-        }, true);
-    };
-    if (document.readyState === "complete" || document.readyState === "interactive") setupApp();
-    else window.addEventListener("DOMContentLoaded", setupApp);
-    </script>
-"""
-components.html(disable_devtools, height=0, width=0)
 
 # --- 定数・ファイルパス ---
 ACCOUNTS_FILE = "accounts.json"
@@ -56,7 +23,7 @@ def get_jst_now_str():
 def get_org_file_path(org_id):
     return f"data_{org_id}.xlsx"
 
-# --- アカウント情報管理関数 ---
+# --- アカウント情報管理 ---
 def load_accounts():
     if not os.path.exists(ACCOUNTS_FILE):
         return {}
@@ -85,7 +52,7 @@ DEFAULT_TABLES = [
     {"テーブル番号": "8番卓", "定員": 4, "エリア": "受付・入口", "ステータス": "空席"},
 ]
 
-# --- 団体別Excelデータ操作 ---
+# --- Excelデータ操作 ---
 def init_org_excel(org_id):
     file_path = get_org_file_path(org_id)
     if not os.path.exists(file_path):
@@ -148,318 +115,441 @@ def update_order_status(org_id, order_id, new_status):
 # --- SESSION STATE 初期化 ---
 if "logged_org" not in st.session_state:
     st.session_state.logged_org = None
+if "selected_mode" not in st.session_state:
+    st.session_state.selected_mode = None
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
-if "authenticated_pages" not in st.session_state:
-    st.session_state.authenticated_pages = set()
+if "confirm_logout" not in st.session_state:
+    st.session_state.confirm_logout = False
+if "login_tab_index" not in st.session_state:
+    st.session_state.login_tab_index = 0
 
-# --- 🔐 ① ログイン ＆ 団体登録画面 ---
-if not st.session_state.logged_org:
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
+# --- ⑤ UI非表示 ＆ スタイリング制御 ---
+# 管理者モード以外（または未ログイン時）はヘッダー・フッター・サイドバーを完全に非表示
+hide_style = """
+    <style>
+    [data-testid="stHeader"] { display: none !important; }
+    footer { display: none !important; }
+    #MainMenu { display: none !important; }
+    .stDeployButton { display: none !important; }
+    </style>
+"""
+if not st.session_state.is_admin:
+    hide_style += """
+        <style>
+        [data-testid="stSidebar"] { display: none !important; }
+        </style>
+    """
+
+st.markdown(hide_style, unsafe_allow_html=True)
+
+# 右クリック・ショートカット無効化
+disable_devtools = """
+    <script>
+    const setupApp = function() {
+        const targetDoc = window.parent.document || document;
+        targetDoc.addEventListener('contextmenu', e => e.preventDefault(), true);
+        targetDoc.addEventListener('keydown', e => {
+            if (e.keyCode === 123 || ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.keyCode === 73 || e.keyCode === 74)) || ((e.ctrlKey || e.metaKey) && e.keyCode === 85)) {
+                e.preventDefault(); return false;
+            }
+        }, true);
+    };
+    if (document.readyState === "complete" || document.readyState === "interactive") setupApp();
+    else window.addEventListener("DOMContentLoaded", setupApp);
+    </script>
+"""
+components.html(disable_devtools, height=0, width=0)
+
+# --- 共通ログアウト表示関数（④ 誤操作防止ダイアログ付き） ---
+def render_header_logout_button():
+    col_a, col_b = st.columns([4, 1])
+    with col_a:
+        st.caption(f"🏫 ログイン中: **{st.session_state.logged_org}** ｜ モード: **{st.session_state.selected_mode}**")
+    with col_b:
+        if st.button("🚪 ログアウト", key="top_logout_btn", use_container_width=True):
+            st.session_state.confirm_logout = True
+
+    if st.session_state.confirm_logout:
         with st.container(border=True):
-            st.title("🏢 文化祭カフェ 総合ログイン")
-            tab_login, tab_register = st.tabs(["🔑 ログイン", "📝 新規団体登録"])
+            st.warning("⚠️ **本当にログアウトしますか？**（選択画面に戻ります）")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("はい（ログアウト）", type="primary", use_container_width=True):
+                    st.session_state.logged_org = None
+                    st.session_state.selected_mode = None
+                    st.session_state.is_admin = False
+                    st.session_state.confirm_logout = False
+                    st.rerun()
+            with c2:
+                if st.button("いいえ（キャンセル）", use_container_width=True):
+                    st.session_state.confirm_logout = False
+                    st.rerun()
+
+# --- 🔐 ① 新規登録 ＆ ログイン画面 ---
+if not st.session_state.logged_org:
+    st.markdown("<br>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c2:
+        with st.container(border=True):
+            st.title("🏫 カフェ管理システム")
+            
+            # タブ切り替え制御
+            active_tab = st.radio("メニュー選択", ["🔑 ログイン", "📝 新規団体登録"], horizontal=True, label_visibility="collapsed")
             accounts = load_accounts()
 
-            # --- ログイン タブ ---
-            with tab_login:
-                org_input = st.text_input("団体ID（ユーザーネーム）", key="login_org_id")
-                login_role = st.radio("ログインモード", ["管理者モード", "一般スタッフモード"], horizontal=True)
-                pass_input = st.text_input("パスワード", type="password", key="login_pass")
+            if active_tab == "🔑 ログイン":
+                org_input = st.text_input("団体ID", key="login_org_id")
+                pass_input = st.text_input("ログインパスワード", type="password", key="login_pass")
 
                 if st.button("ログイン", type="primary", use_container_width=True):
                     if org_input in accounts:
-                        org_acc = accounts[org_input]
-                        if login_role == "管理者モード":
-                            if pass_input == org_acc["passwords"]["admin"]:
-                                st.session_state.logged_org = org_input
-                                st.session_state.is_admin = True
-                                st.success("管理者としてログインしました！")
-                                init_org_excel(org_input)
-                                time.sleep(0.5)
-                                st.rerun()
-                            else:
-                                st.error("管理者パスワードが正しくありません。")
-                        else:
+                        if pass_input == accounts[org_input]["password"]:
                             st.session_state.logged_org = org_input
-                            st.session_state.is_admin = False
-                            st.success("スタッフモードでログインしました！")
                             init_org_excel(org_input)
-                            time.sleep(0.5)
+                            st.success("ログインしました！")
+                            time.sleep(0.3)
                             st.rerun()
+                        else:
+                            st.error("パスワードが正しくありません。")
                     else:
                         st.error("指定された団体IDが存在しません。")
 
-            # --- 新規登録 タブ ---
-            with tab_register:
-                new_org_id = st.text_input("新規 団体ID（例: class3a）", key="reg_org_id")
-                new_admin_pass = st.text_input("🔑 管理者用パスワード", type="password", key="reg_admin_pass")
-                st.caption("※ 各画面の閲覧用個別パスワードを設定してください")
-                
-                reg_p_register = st.text_input("🛒 レジ画面用パスワード", value="1111", type="password")
-                reg_p_backyard = st.text_input("👨‍🍳 バックヤード画面用パスワード", value="2222", type="password")
-                reg_p_reception = st.text_input("🏢 受付画面用パスワード", value="3333", type="password")
-                reg_p_map = st.text_input("🗺️ 座席マップ画面用パスワード", value="4444", type="password")
-                reg_p_sales = st.text_input("📊 売上確認画面用パスワード", value="5555", type="password")
+            else:  # ① 新規団体登録画面
+                new_org_id = st.text_input("希望の団体ID（例: class3a）", key="reg_org_id")
+                new_pass = st.text_input("ログインパスワード設定", type="password", key="reg_pass")
 
-                if st.button("新規アカウントを作成", type="primary", use_container_width=True):
-                    if not new_org_id or not new_admin_pass:
-                        st.error("団体IDと管理者用パスワードは必須です。")
+                if st.button("新規団体を登録する", type="primary", use_container_width=True):
+                    if not new_org_id or not new_pass:
+                        st.error("団体IDとパスワードの両方を入力してください。")
                     elif new_org_id in accounts:
                         st.error("その団体IDは既に使われています。別のIDを指定してください。")
                     else:
                         accounts[new_org_id] = {
-                            "passwords": {
-                                "admin": new_admin_pass,
-                                "🛒 注文入力画面": reg_p_register,
-                                "👨‍🍳 バックヤード画面": reg_p_backyard,
-                                "🏢 受付（退席確認）": reg_p_reception,
-                                "🗺️ 店内座席マップ": reg_p_map,
-                                "📊 売計データ確認・取消": reg_p_sales
-                            }
+                            "password": new_pass,
+                            "admin_password": None, # 初回管理者起動時に設定
+                            "is_first_login": True
                         }
                         save_accounts(accounts)
                         init_org_excel(new_org_id)
-                        st.success("登録が完了しました！ログインタブからログインしてください。")
+                        st.success("登録完了！ログイン画面からログインしてください。")
+                        time.sleep(1.2)
+                        st.rerun()
     st.stop()
 
-# --- 🚀 ログイン後のシステム管理領域 ---
+# アカウント情報取得
 org_id = st.session_state.logged_org
 accounts = load_accounts()
-org_passwords = accounts[org_id]["passwords"]
+org_acc = accounts[org_id]
 
-# サイドバー表示
-st.sidebar.title(f"🏫 団体: {org_id}")
-if st.session_state.is_admin:
-    st.sidebar.success("👑 管理者モードで接続中")
-else:
-    st.sidebar.info("👤 スタッフモードで接続中")
-
-# メニュー選択肢の構築
-menu_options = [
-    "🛒 注文入力画面", 
-    "🏢 受付（退席確認）", 
-    "👨‍🍳 バックヤード画面", 
-    "🗺️ 店内座席マップ", 
-    "📊 売計データ確認・取消"
-]
-if st.session_state.is_admin:
-    menu_options.append("⚙️ 店舗・レイアウト設定")
-    menu_options.append("🧹 データ初期化")
-
-mode = st.sidebar.radio("画面を選択してください", menu_options)
-
-st.sidebar.markdown("---")
-if st.sidebar.button("🔄 画面情報更新", use_container_width=True):
-    st.rerun()
-
-if st.sidebar.button("🚪 ログアウト", use_container_width=True):
-    st.session_state.logged_org = None
-    st.session_state.is_admin = False
-    st.session_state.authenticated_pages = set()
-    st.rerun()
-
-# --- 🔒 画面個別のアクセス権限チェック ---
-def check_page_permission(page_name):
-    if st.session_state.is_admin:
-        return True
-    if page_name in st.session_state.authenticated_pages:
-        return True
+# --- ② 初回ログイン時 セットアップウィザード ---
+if org_acc.get("is_first_login", False):
+    st.title("🎉 ご登録ありがとうございます！")
+    st.subheader("最初に店舗のメニューや卓数の初期設定を行いますか？")
+    st.info("※設定は後から「管理者モード」でいつでも自由に変更・やり直すことができます。")
     
-    st.title(f"🔒 {page_name}")
-    st.warning(f"このページにアクセスするには「{page_name}」専用のパスワードが必要です。")
-    pw_input = st.text_input("パスワードを入力", type="password", key=f"auth_pw_{page_name}")
-    if st.button("閲覧許可", type="primary"):
-        target_pw = org_passwords.get(page_name, "")
-        if pw_input == target_pw:
-            st.session_state.authenticated_pages.add(page_name)
-            st.success("認証成功！")
-            time.sleep(0.3)
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("⚙️ 今すぐ初期設定をする", type="primary", use_container_width=True):
+            st.session_state.selected_mode = "👑 管理者モード"
+            st.session_state.is_admin = True
+            org_acc["is_first_login"] = False
+            save_accounts(accounts)
             st.rerun()
-        else:
-            st.error("パスワードが違います。")
-    return False
+    with col2:
+        if st.button("⏩ 今回はスキップ（デフォルト設定で使用）", use_container_width=True):
+            org_acc["is_first_login"] = False
+            save_accounts(accounts)
+            st.success("デフォルト設定で開始します！")
+            time.sleep(0.5)
+            st.rerun()
+    st.stop()
 
-# データ読込
+# --- ③ ログイン後のモード選択メニュー ---
+if not st.session_state.selected_mode:
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.title(f"🏫 団体: {org_id} ｜ 起動モード選択")
+    st.caption("利用する機能を選択してください。")
+    st.markdown("---")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        with st.container(border=True):
+            st.header("🛒 レジ")
+            st.write("注文入力と伝票発行")
+            if st.button("「レジ」を起動", use_container_width=True, type="primary"):
+                st.session_state.selected_mode = "🛒 レジ"
+                st.rerun()
+    with c2:
+        with st.container(border=True):
+            st.header("👨‍🍳 バックヤード")
+            st.write("調理確認・提供チェック")
+            if st.button("「バックヤード」を起動", use_container_width=True, type="primary"):
+                st.session_state.selected_mode = "👨‍🍳 バックヤード"
+                st.rerun()
+    with c3:
+        with st.container(border=True):
+            st.header("🏢 店内退席確認")
+            st.write("受付での空席・退席管理")
+            if st.button("「退席確認」を起動", use_container_width=True, type="primary"):
+                st.session_state.selected_mode = "🏢 店内退席確認"
+                st.rerun()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    c4, c5 = st.columns(2)
+    with c4:
+        with st.container(border=True):
+            st.header("🗺️ 店内状況表示")
+            st.write("リアルタイム座席マップ")
+            if st.button("「店内状況」を起動", use_container_width=True):
+                st.session_state.selected_mode = "🗺️ 店内状況表示"
+                st.rerun()
+    with c5:
+        with st.container(border=True):
+            st.header("👑 管理者")
+            st.write("売上確認・各種設定・初期化")
+            if st.button("「管理者モード」を起動", use_container_width=True):
+                st.session_state.selected_mode = "👑 管理者モード"
+                st.rerun()
+
+    st.markdown("---")
+    if st.button("🚪 団体ログイン画面へ戻る"):
+        st.session_state.logged_org = None
+        st.rerun()
+    st.stop()
+
+# --- 👑 管理者モード認証処理 ---
+if st.session_state.selected_mode == "👑 管理者モード" and not st.session_state.is_admin:
+    st.title("👑 管理者モード認証")
+    admin_pw = org_acc.get("admin_password")
+
+    # 初回管理者モード起動時（パスワード未設定）
+    if admin_pw is None:
+        st.info("💡 管理者モード用のパスワードが未設定です。新しい管理者パスワードを設定してください。")
+        new_admin_pw = st.text_input("新規 管理者パスワード", type="password", key="set_admin_pw")
+        if st.button("管理者パスワードを保存して起動", type="primary"):
+            if new_admin_pw:
+                org_acc["admin_password"] = new_admin_pw
+                save_accounts(accounts)
+                st.session_state.is_admin = True
+                st.success("パスワードを設定しました！")
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.error("パスワードを入力してください。")
+    else:
+        input_admin_pw = st.text_input("管理者パスワードを入力", type="password", key="chk_admin_pw")
+        c1, c2 = st.columns([1, 4])
+        with c1:
+            if st.button("認証", type="primary", use_container_width=True):
+                if input_admin_pw == admin_pw:
+                    st.session_state.is_admin = True
+                    st.success("認証成功！")
+                    time.sleep(0.3)
+                    st.rerun()
+                else:
+                    st.error("管理者パスワードが違います。")
+        with c2:
+            if st.button("キャンセル（モード選択へ）"):
+                st.session_state.selected_mode = None
+                st.rerun()
+    st.stop()
+
+# 共通データの読込
 df_menu, df_orders, df_tables = load_org_data(org_id)
 
-# --- 各画面のレンダリング ---
+# ==========================================
+# 各専用画面の表示処理
+# ==========================================
 
-# 1. 注文入力画面
-if mode == "🛒 注文入力画面":
-    if check_page_permission(mode):
-        st.title("🛒 注文入力（レジフロント）")
-        for _, row in df_menu.iterrows():
-            key = f"qty_{org_id}_{row['メニューID']}"
-            if key not in st.session_state:
-                st.session_state[key] = 0
+# 1. 🛒 レジ画面
+if st.session_state.selected_mode == "🛒 レジ":
+    render_header_logout_button()
+    st.title("🛒 注文入力（レジフロント）")
 
-        if "selected_table" not in st.session_state:
-            st.session_state.selected_table = df_tables.iloc[0]["テーブル番号"] if len(df_tables) > 0 else "1番卓"
+    for _, row in df_menu.iterrows():
+        key = f"qty_{org_id}_{row['メニューID']}"
+        if key not in st.session_state:
+            st.session_state[key] = 0
 
-        st.markdown("### ☕ メニュー選択")
-        cols = st.columns(min(len(df_menu), 4) if len(df_menu) > 0 else 1)
-        counts = {}
+    if "selected_table" not in st.session_state:
+        st.session_state.selected_table = df_tables.iloc[0]["テーブル番号"] if len(df_tables) > 0 else "1番卓"
+
+    st.markdown("### ☕ メニュー選択")
+    cols = st.columns(min(len(df_menu), 4) if len(df_menu) > 0 else 1)
+    counts = {}
+    
+    for i, row in df_menu.iterrows():
+        m_id = row['メニューID']
+        m_name = row['メニュー名']
+        key = f"qty_{org_id}_{m_id}"
         
-        for i, row in df_menu.iterrows():
-            m_id = row['メニューID']
-            m_name = row['メニュー名']
-            key = f"qty_{org_id}_{m_id}"
+        target_col = cols[i % len(cols)]
+        with target_col:
+            st.markdown(
+                f'<div style="border-left: 8px solid {row.get("カラーコード", "#1E90FF")}; padding-left: 10px; margin-bottom: 5px;">'
+                f'<h4 style="margin-bottom:0px;">{m_name}</h4>'
+                f'<p style="color: gray; margin-top:2px;">価格: {row["価格"]}円</p></div>', 
+                unsafe_allow_html=True
+            )
             
-            target_col = cols[i % len(cols)]
-            with target_col:
-                st.markdown(
-                    f'<div style="border-left: 8px solid {row.get("カラーコード", "#1E90FF")}; padding-left: 10px; margin-bottom: 5px;">'
-                    f'<h4 style="margin-bottom:0px;">{m_name}</h4>'
-                    f'<p style="color: gray; margin-top:2px;">価格: {row["価格"]}円</p></div>', 
-                    unsafe_allow_html=True
-                )
-                
-                b_minus, b_num, b_plus = st.columns([1, 1.5, 1])
-                with b_minus:
-                    if st.button("➖", key=f"btn_m_{m_id}"):
-                        if st.session_state[key] > 0:
-                            st.session_state[key] -= 1
-                            st.rerun()
-                with b_num:
-                    st.markdown(f"<div style='text-align:center; font-size:1.5em; font-weight:bold;'>{st.session_state[key]}</div>", unsafe_allow_html=True)
-                with b_plus:
-                    if st.button("➕", key=f"btn_p_{m_id}"):
-                        st.session_state[key] += 1
+            b_minus, b_num, b_plus = st.columns([1, 1.5, 1])
+            with b_minus:
+                if st.button("➖", key=f"btn_m_{m_id}"):
+                    if st.session_state[key] > 0:
+                        st.session_state[key] -= 1
                         st.rerun()
-                counts[m_name] = st.session_state[key]
-
-        st.markdown("---")
-        st.markdown("### 🪑 割り当てるテーブル選択")
-        t_cols = st.columns(min(len(df_tables), 8) if len(df_tables) > 0 else 1)
-        
-        for idx, (_, t_row) in enumerate(df_tables.iterrows()):
-            t_name = t_row["テーブル番号"]
-            is_vacant = (t_row["ステータス"] == "空席")
-            btn_label = f"🟢 {t_name}" if is_vacant else f"🔴 {t_name}"
-            btn_type = "primary" if st.session_state.selected_table == t_name else "secondary"
-            
-            with t_cols[idx % len(t_cols)]:
-                if st.button(btn_label, key=f"tbl_btn_{t_name}", type=btn_type, use_container_width=True):
-                    st.session_state.selected_table = t_name
+            with b_num:
+                st.markdown(f"<div style='text-align:center; font-size:1.5em; font-weight:bold;'>{st.session_state[key]}</div>", unsafe_allow_html=True)
+            with b_plus:
+                if st.button("➕", key=f"btn_p_{m_id}"):
+                    st.session_state[key] += 1
                     st.rerun()
+            counts[m_name] = st.session_state[key]
 
-        selected_t_info = df_tables[df_tables["テーブル番号"] == st.session_state.selected_table].iloc[0]
-        selected_is_vacant = (selected_t_info["ステータス"] == "空席")
-        selected_cap = selected_t_info["定員"]
+    st.markdown("---")
+    st.markdown("### 🪑 割り当てるテーブル選択")
+    t_cols = st.columns(min(len(df_tables), 8) if len(df_tables) > 0 else 1)
+    
+    for idx, (_, t_row) in enumerate(df_tables.iterrows()):
+        t_name = t_row["テーブル番号"]
+        is_vacant = (t_row["ステータス"] == "空席")
+        btn_label = f"🟢 {t_name}" if is_vacant else f"🔴 {t_name}"
+        btn_type = "primary" if st.session_state.selected_table == t_name else "secondary"
         
-        total_items = sum(counts.values())
-        total_price = sum(counts[row["メニュー名"]] * row["価格"] for _, row in df_menu.iterrows())
-        
-        st.markdown("---")
-        st.markdown(f"## 💰 合計金額: <span style='color: #FF4B4B;'>{total_price} 円</span> （{total_items} 点） ｜ 選択: **{st.session_state.selected_table}** (定員:{selected_cap}名)", unsafe_allow_html=True)
+        with t_cols[idx % len(t_cols)]:
+            if st.button(btn_label, key=f"tbl_btn_{t_name}", type=btn_type, use_container_width=True):
+                st.session_state.selected_table = t_name
+                st.rerun()
 
-        if not selected_is_vacant:
-            st.warning(f"⚠️ **注意：{st.session_state.selected_table} は現在「利用中」です。**（追加注文・相席としてそのまま確定可能です）")
-        if total_items > selected_cap:
-            st.warning(f"⚠️ **注意：定員を超えています。**（定員 {selected_cap} 名に対し {total_items} 点選択中）")
+    selected_t_info = df_tables[df_tables["テーブル番号"] == st.session_state.selected_table].iloc[0]
+    selected_is_vacant = (selected_t_info["ステータス"] == "空席")
+    selected_cap = selected_t_info["定員"]
+    
+    total_items = sum(counts.values())
+    total_price = sum(counts[row["メニュー名"]] * row["価格"] for _, row in df_menu.iterrows())
+    
+    st.markdown("---")
+    st.markdown(f"## 💰 合計金額: <span style='color: #FF4B4B;'>{total_price} 円</span> （{total_items} 点） ｜ 選択: **{st.session_state.selected_table}** (定員:{selected_cap}名)", unsafe_allow_html=True)
 
-        if st.button("🚀 注文確定", type="primary", use_container_width=True, disabled=(total_items == 0)):
-            order_id = save_order(org_id, st.session_state.selected_table, counts, total_price)
-            st.success(f"🎉 注文確定！ 【注文番号: #{order_id} / テーブル: {st.session_state.selected_table}】")
-            for _, row in df_menu.iterrows():
-                st.session_state[f"qty_{org_id}_{row['メニューID']}"] = 0
-            time.sleep(1.0)
+    if not selected_is_vacant:
+        st.warning(f"⚠️ **注意：{st.session_state.selected_table} は現在「利用中」です。**（追加注文・相席として登録可能）")
+
+    if st.button("🚀 注文確定", type="primary", use_container_width=True, disabled=(total_items == 0)):
+        order_id = save_order(org_id, st.session_state.selected_table, counts, total_price)
+        st.success(f"🎉 注文確定！ 【注文番号: #{order_id} / テーブル: {st.session_state.selected_table}】")
+        for _, row in df_menu.iterrows():
+            st.session_state[f"qty_{org_id}_{row['メニューID']}"] = 0
+        time.sleep(1.0)
+        st.rerun()
+
+# 2. 👨‍🍳 バックヤード画面
+elif st.session_state.selected_mode == "👨‍🍳 バックヤード":
+    render_header_logout_button()
+    st.title("👨‍🍳 バックヤード（調理・提供）")
+    active_orders = df_orders[df_orders["ステータス"] == "未提供"]
+    
+    c_left, c_right = st.columns([3, 1])
+    with c_left:
+        st.markdown(f"### 📋 未提供注文： {len(active_orders)} 件")
+    with c_right:
+        if st.button("🔄 最新情報に更新", use_container_width=True):
             st.rerun()
 
-# 2. 受付（退席確認）画面
-elif mode == "🏢 受付（退席確認）":
-    if check_page_permission(mode):
-        st.title("🏢 受付（退席確認）")
-        cols = st.columns(2)
-        for idx, (_, t_row) in enumerate(df_tables.iterrows()):
+    for _, order in active_orders.iloc[::-1].iterrows():
+        items_text = []
+        for _, m_row in df_menu.iterrows():
+            col_name = f"{m_row['メニュー名']}点数"
+            if col_name in order and order[col_name] > 0:
+                items_text.append(f"■ {m_row['メニュー名']}: {order[col_name]}点")
+        
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            st.info(f"🪑 **{order['テーブル番号']}** ｜ 注文番号: #{order['注文番号']} ({order['日時']})\n\n" + " ｜ ".join(items_text))
+        with c2:
+            if st.button(f"✅ 提供完了 (#{order['注文番号']})", key=f"done_{order['注文番号']}", type="primary", use_container_width=True):
+                update_order_status(org_id, order["注文番号"], "提供済み")
+                st.rerun()
+
+# 3. 🏢 店内退席確認画面
+elif st.session_state.selected_mode == "🏢 店内退席確認":
+    render_header_logout_button()
+    st.title("🏢 受付（退席確認）")
+    cols = st.columns(2)
+    for idx, (_, t_row) in enumerate(df_tables.iterrows()):
+        t_name = t_row["テーブル番号"]
+        status = t_row["ステータス"]
+        cap = t_row["定員"]
+        pending = df_orders[(df_orders["テーブル番号"] == t_name) & (df_orders["ステータス"] == "未提供")]
+        
+        with cols[idx % 2]:
+            with st.container(border=True):
+                c1, c2 = st.columns([2, 1])
+                with c1:
+                    st.subheader(f"🪑 {t_name} (定員{cap}名)")
+                    if status == "利用中":
+                        if len(pending) > 0:
+                            st.warning(f"🔴 お客様在席中（⚠️ 未提供あり: {len(pending)}件）")
+                        else:
+                            st.error("🔴 お客様在席中（✅ 提供完了）")
+                    else:
+                        st.success("🟢 空席")
+                with c2:
+                    if status == "利用中":
+                        if len(pending) > 0:
+                            if st.button("⚠️ 強制退席", key=f"rec_out_{t_name}"):
+                                update_table_status(org_id, t_name, "空席")
+                                st.rerun()
+                        else:
+                            if st.button("📤 退席（空席）", key=f"rec_out_{t_name}", type="primary"):
+                                update_table_status(org_id, t_name, "空席")
+                                st.rerun()
+                    else:
+                        st.button("🟢 待機中", key=f"rec_idle_{t_name}", disabled=True)
+
+# 4. 🗺️ 店内状況表示画面
+elif st.session_state.selected_mode == "🗺️ 店内状況表示":
+    render_header_logout_button()
+    st.title("🗺️ リアルタイム店内座席マップ")
+    areas = df_tables["エリア"].unique() if "エリア" in df_tables.columns else ["メインフロア"]
+    
+    for area in areas:
+        st.subheader(f"📍 {area}")
+        area_tables = df_tables[df_tables["エリア"] == area]
+        cols = st.columns(min(len(area_tables), 4) if len(area_tables) > 0 else 1)
+        
+        for idx, (_, t_row) in enumerate(area_tables.iterrows()):
             t_name = t_row["テーブル番号"]
             status = t_row["ステータス"]
             cap = t_row["定員"]
-            pending = df_orders[(df_orders["テーブル番号"] == t_name) & (df_orders["ステータス"] == "未提供")]
             
-            with cols[idx % 2]:
+            with cols[idx % len(cols)]:
                 with st.container(border=True):
-                    c1, c2 = st.columns([2, 1])
-                    with c1:
-                        st.subheader(f"🪑 {t_name} (定員{cap}名)")
-                        if status == "利用中":
-                            if len(pending) > 0:
-                                st.warning(f"🔴 お客様在席中（⚠️ 未提供あり: {len(pending)}件）")
-                            else:
-                                st.error("🔴 お客様在席中（✅ 提供完了）")
-                        else:
-                            st.success("🟢 空席")
-                    with c2:
-                        if status == "利用中":
-                            if len(pending) > 0:
-                                if st.button("⚠️ 強制退席", key=f"rec_out_{t_name}"):
-                                    update_table_status(org_id, t_name, "空席")
-                                    st.rerun()
-                            else:
-                                if st.button("📤 退席（空席）", key=f"rec_out_{t_name}", type="primary"):
-                                    update_table_status(org_id, t_name, "空席")
-                                    st.rerun()
-                        else:
-                            st.button("🟢 待機中", key=f"rec_idle_{t_name}", disabled=True)
+                    st.markdown(f"**🪑 {t_name}** ({cap}人席)")
+                    if status == "利用中":
+                        st.markdown("<span style='color:red; font-weight:bold;'>🔴 利用中</span>", unsafe_allow_html=True)
+                    else:
+                        st.markdown("<span style='color:green; font-weight:bold;'>🟢 空席</span>", unsafe_allow_html=True)
 
-# 3. バックヤード画面
-elif mode == "👨‍🍳 バックヤード画面":
-    if check_page_permission(mode):
-        st.title("👨‍🍳 バックヤード（調理・提供）")
-        active_orders = df_orders[df_orders["ステータス"] == "未提供"]
-        st.markdown(f"### 📋 未提供注文： {len(active_orders)} 件")
-        
-        for _, order in active_orders.iloc[::-1].iterrows():
-            items_text = []
-            for _, m_row in df_menu.iterrows():
-                col_name = f"{m_row['メニュー名']}点数"
-                if col_name in order and order[col_name] > 0:
-                    items_text.append(f"■ {m_row['メニュー名']}: {order[col_name]}点")
-            
-            c1, c2 = st.columns([3, 1])
-            with c1:
-                st.info(f"🪑 **{order['テーブル番号']}** ｜ 注文番号: #{order['注文番号']} ({order['日時']})\n\n" + " ｜ ".join(items_text))
-            with c2:
-                if st.button(f"✅ 提供完了 (#{order['注文番号']})", key=f"done_{order['注文番号']}", type="primary"):
-                    update_order_status(org_id, order["注文番号"], "提供済み")
-                    st.rerun()
+# 5. 👑 管理者モード画面
+elif st.session_state.selected_mode == "👑 管理者モード":
+    # 管理者専用サイドバーの表示
+    st.sidebar.title(f"👑 {org_id} 管理メニュー")
+    admin_tab = st.sidebar.radio("機能切り替え", ["📊 売上データ確認・取消", "⚙️ メニュー・レイアウト設定", "🔐 管理者パスワード変更", "🧹 データ初期化"])
+    
+    if st.sidebar.button("🚪 管理者モードを終了"):
+        st.session_state.selected_mode = None
+        st.session_state.is_admin = False
+        st.rerun()
 
-# 4. 店内座席マップ画面
-elif mode == "🗺️ 店内座席マップ":
-    if check_page_permission(mode):
-        st.title("🗺️ リアルタイム店内座席マップ")
-        areas = df_tables["エリア"].unique() if "エリア" in df_tables.columns else ["メインフロア"]
-        
-        for area in areas:
-            st.subheader(f"📍 {area}")
-            area_tables = df_tables[df_tables["エリア"] == area]
-            cols = st.columns(min(len(area_tables), 4) if len(area_tables) > 0 else 1)
-            
-            for idx, (_, t_row) in enumerate(area_tables.iterrows()):
-                t_name = t_row["テーブル番号"]
-                status = t_row["ステータス"]
-                cap = t_row["定員"]
-                
-                with cols[idx % len(cols)]:
-                    with st.container(border=True):
-                        st.markdown(f"**🪑 {t_name}** ({cap}人席)")
-                        if status == "利用中":
-                            st.markdown("<span style='color:red; font-weight:bold;'>🔴 利用中</span>", unsafe_allow_html=True)
-                        else:
-                            st.markdown("<span style='color:green; font-weight:bold;'>🟢 空席</span>", unsafe_allow_html=True)
+    st.title(f"👑 管理者コントロールパネル - {admin_tab}")
 
-# 5. 売計データ確認・取消画面
-elif mode == "📊 売計データ確認・取消":
-    if check_page_permission(mode):
-        st.title("📊 売計データ確認 ＆ 注文取消")
+    # A. 売上確認
+    if admin_tab == "📊 売上データ確認・取消":
         valid_orders = df_orders[df_orders["ステータス"] != "取消済み"]
-        
         st.metric("総売上金額", f"{valid_orders['合計金額'].sum():,} 円")
         st.markdown("---")
-        st.subheader("🛠️ 注文履歴")
+        st.subheader("🛠️ 注文履歴管理")
         
         for _, order in df_orders.iloc[::-1].iterrows():
             c1, c2 = st.columns([4, 1])
@@ -471,56 +561,58 @@ elif mode == "📊 売計データ確認・取消":
                         update_order_status(org_id, order["注文番号"], "取消済み")
                         st.rerun()
 
-# 6. ⚙️ 店舗・レイアウト設定（管理者専用）
-elif mode == "⚙️ 店舗・レイアウト設定":
-    if st.session_state.is_admin:
-        st.title("⚙️ 店舗・レイアウト設定（管理者専用）")
-        
-        tab1, tab2 = st.tabs(["☕ メニュー編集", "🪑 テーブル・レイアウト編集"])
-        
+    # B. 設定編集
+    elif admin_tab == "⚙️ メニュー・レイアウト設定":
+        tab1, tab2 = st.tabs(["☕ メニュー設定", "🪑 テーブル設定"])
         with tab1:
-            st.subheader("現在のメニュー構成")
-            edited_menu = st.data_editor(df_menu, num_rows="dynamic", use_container_width=True, key="menu_editor")
+            edited_menu = st.data_editor(df_menu, num_rows="dynamic", use_container_width=True, key="menu_ed")
             if st.button("💾 メニュー設定を保存", type="primary"):
                 save_org_sheets(org_id, edited_menu, df_orders, df_tables)
-                st.success("メニュー情報を更新しました！")
+                st.success("保存しました！")
                 time.sleep(0.5)
                 st.rerun()
-
         with tab2:
-            st.subheader("現在のテーブル設定")
-            edited_tables = st.data_editor(df_tables, num_rows="dynamic", use_container_width=True, key="table_editor")
+            edited_tables = st.data_editor(df_tables, num_rows="dynamic", use_container_width=True, key="tbl_ed")
             if st.button("💾 テーブル設定を保存", type="primary"):
                 save_org_sheets(org_id, df_menu, df_orders, edited_tables)
-                st.success("テーブル情報を更新しました！")
+                st.success("保存しました！")
                 time.sleep(0.5)
                 st.rerun()
 
-# 7. 🧹 データ初期化（管理者専用）
-elif mode == "🧹 データ初期化":
-    if st.session_state.is_admin:
-        st.title("🧹 データ初期化（管理者専用）")
-        st.warning("⚠️ データの初期化を行うと元に戻すことはできません。慎重に行ってください。")
-        
-        st.markdown("### 1. 注文・売上履歴のみリセット（営業2日目開始時等）")
-        if st.button("🔥 注文・売上履歴を完全削除", type="secondary"):
+    # C. 管理者パスワード変更
+    elif admin_tab == "🔐 管理者パスワード変更":
+        st.subheader("管理者用パスワードの変更")
+        curr_admin_pass = st.text_input("新しい管理者パスワードを入力", type="password")
+        if st.button("パスワードを変更する", type="primary"):
+            if curr_admin_pass:
+                org_acc["admin_password"] = curr_admin_pass
+                save_accounts(accounts)
+                st.success("管理者パスワードを更新しました！")
+            else:
+                st.error("パスワードを入力してください。")
+
+    # D. データ初期化
+    elif admin_tab == "🧹 データ初期化":
+        st.warning("⚠️ データの初期化を行うと元に戻せません。")
+        st.markdown("#### 1. 売上・注文履歴のみクリア（営業2日目など）")
+        if st.button("🔥 注文・売上履歴をクリア"):
             df_orders_clean = pd.DataFrame(columns=["注文番号", "日時", "テーブル番号", "合計金額", "ステータス"])
             for _, m in df_menu.iterrows():
                 df_orders_clean[f"{m['メニュー名']}点数"] = 0
             df_tables["ステータス"] = "空席"
             save_org_sheets(org_id, df_menu, df_orders_clean, df_tables)
-            st.success("注文履歴と卓のステータスをリセットしました！")
+            st.success("売上履歴をリセットしました！")
             time.sleep(0.5)
             st.rerun()
-            
+
         st.markdown("---")
-        st.markdown("### 2. 全データ・設定の初期化（デフォルトに戻す）")
-        if st.button("🚨 メニュー・卓設定含め全データを初期化", type="primary"):
+        st.markdown("#### 2. 全設定を初期化")
+        if st.button("🚨 全データを初期化（デフォルトへ戻す）", type="primary"):
             init_org_excel(org_id)
             df_m = pd.DataFrame(DEFAULT_MENU)
             df_o = pd.DataFrame(columns=["注文番号", "日時", "テーブル番号", "合計金額", "ステータス"])
             df_t = pd.DataFrame(DEFAULT_TABLES)
             save_org_sheets(org_id, df_m, df_o, df_t)
-            st.success("初期状態に全リセットしました！")
+            st.success("全データを初期化しました！")
             time.sleep(0.5)
             st.rerun()
